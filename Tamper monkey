@@ -1,0 +1,315 @@
+// ==UserScript==
+
+// @name         E-Box Stealth Typer v2.4.0 (The Controller)
+
+// @namespace    http://tampermonkey.net/
+
+// @version      2.4.0
+
+// @description  Adds Pause/Resume, Stop, and transparent hover controls with reduced typing speed.
+
+// @author       Gemini
+
+// @match        *://*.e-box.co.in/*
+
+// @grant        none
+
+// @run-at       document-end
+
+// ==/UserScript==
+
+
+
+(function() {
+
+    'use strict';
+
+
+
+    let speedMode = 'Human';
+
+    let isTyping = false;
+
+    let isPaused = false;
+
+
+
+    const workerCode = `
+
+        onmessage = function(e) {
+
+            setTimeout(() => {
+
+                postMessage('tick');
+
+            }, e.data);
+
+        };
+
+    `;
+
+    const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
+
+    const timerWorker = new Worker(URL.createObjectURL(workerBlob));
+
+
+
+    function injectButton() {
+
+        if (document.getElementById('ebox-typer-container')) return;
+
+
+
+        const container = document.createElement('div');
+
+        container.id = 'ebox-typer-container';
+
+        // Transparent by default
+
+        container.style = 'position:fixed; bottom:20px; left:20px; z-index:2147483647; display:flex; flex-direction:column; gap:8px; opacity:0.3; transition:opacity 0.3s;';
+
+
+
+        // Hover effect
+
+        container.onmouseover = () => container.style.opacity = '1';
+
+        container.onmouseout = () => container.style.opacity = '0.3';
+
+
+
+        const modeBtn = document.createElement('button');
+
+        modeBtn.innerHTML = 'MODE: ' + speedMode;
+
+        modeBtn.style = 'padding:5px; background:#222; color:#aaa; border:1px solid #444; cursor:pointer; font-size:10px; border-radius:4px;';
+
+
+
+        const mainBtn = document.createElement('button');
+
+        mainBtn.id = 'main-typer-btn';
+
+        mainBtn.innerHTML = 'START TYPER';
+
+        mainBtn.style = 'padding:10px 15px; background:rgba(0, 123, 255, 0.6); color:white; border:1px solid white; border-radius:8px; cursor:pointer; font-weight:bold;';
+
+
+
+        const pauseBtn = document.createElement('button');
+
+        pauseBtn.id = 'pause-typer-btn';
+
+        pauseBtn.innerHTML = 'PAUSE';
+
+        pauseBtn.style = 'padding:8px; background:#ffc107; color:black; border:none; border-radius:5px; cursor:pointer; display:none; font-weight:bold;';
+
+
+
+        modeBtn.onclick = () => {
+
+            const modes = ['Slow', 'Human', 'Fast'];
+
+            speedMode = modes[(modes.indexOf(speedMode) + 1) % modes.length];
+
+            modeBtn.innerHTML = 'MODE: ' + speedMode;
+
+        };
+
+
+
+        pauseBtn.onclick = () => {
+
+            isPaused = !isPaused;
+
+            pauseBtn.innerHTML = isPaused ? 'RESUME' : 'PAUSE';
+
+            pauseBtn.style.background = isPaused ? '#28a745' : '#ffc107';
+
+            pauseBtn.style.color = isPaused ? 'white' : 'black';
+
+        };
+
+
+
+        container.appendChild(modeBtn);
+
+        container.appendChild(mainBtn);
+
+        container.appendChild(pauseBtn);
+
+        document.documentElement.appendChild(container);
+
+
+
+        mainBtn.onclick = async () => {
+
+            if (isTyping) {
+
+                isTyping = false; // This acts as the STOP trigger
+
+                return;
+
+            }
+
+
+
+            let editorDom = document.querySelector('.ace_editor');
+
+            let aceEditor = editorDom ? window.ace.edit(editorDom) : null;
+
+            let target = document.querySelector('.ace_text-input, textarea');
+
+
+
+            if (!target && !aceEditor) { alert("Click inside the code editor first!"); return; }
+
+
+
+            const text = prompt("Paste your Java code here:");
+
+            if (!text) return;
+
+
+
+            // Setup State
+
+            isTyping = true;
+
+            isPaused = false;
+
+            mainBtn.innerHTML = 'STOP';
+
+            mainBtn.style.background = 'rgba(220, 53, 69, 0.8)';
+
+            pauseBtn.style.display = 'block';
+
+            pauseBtn.innerHTML = 'PAUSE';
+
+
+
+            if (aceEditor) {
+
+                aceEditor.setOptions({ behavioursEnabled: false });
+
+                aceEditor.setValue("");
+
+            }
+
+
+
+            for (let i = 0; i < text.length; i++) {
+
+                if (!isTyping) break;
+
+
+
+                // Handle Pause State
+
+                while (isPaused && isTyping) {
+
+                    await new Promise(resolve => setTimeout(resolve, 500));
+
+                }
+
+
+
+                const char = text[i];
+
+
+
+                if (aceEditor) {
+
+                    aceEditor.focus();
+
+                    aceEditor.navigateFileEnd();
+
+                    const content = aceEditor.getValue();
+
+                    const nextChar = content.trim().slice(-1);
+
+                    if (nextChar === char && (char === '}' || char === ')' || char === '"')) {
+
+                        aceEditor.navigateRight(1);
+
+                    } else {
+
+                        aceEditor.insert(char);
+
+                    }
+
+                } else {
+
+                    target.focus();
+
+                    document.execCommand('insertText', false, char);
+
+                }
+
+
+
+                // --- REDUCED SPEED LOGIC ---
+
+                // Human mode is now slower (Avg 300ms vs previous 200ms)
+
+                let delay = (speedMode === 'Slow') ? 600 : (speedMode === 'Human') ? 350 : 50;
+
+
+
+                // Extra delay for syntax and new lines (thinking time)
+
+                if ('\n{};'.includes(char)) {
+
+                    delay += (speedMode === 'Human') ? 600 : 20;
+
+                }
+
+
+
+                await new Promise(resolve => {
+
+                    timerWorker.onmessage = () => resolve();
+
+                    timerWorker.postMessage(delay);
+
+                });
+
+            }
+
+
+
+            // Final Cleanup
+
+            if (aceEditor && isTyping) {
+
+                aceEditor.setValue(text);
+
+                aceEditor.clearSelection();
+
+                aceEditor.navigateFileEnd();
+
+                aceEditor.setOptions({ behavioursEnabled: true });
+
+            }
+
+
+
+            isTyping = false;
+
+            pauseBtn.style.display = 'none';
+
+            mainBtn.innerHTML = 'START TYPER';
+
+            mainBtn.style.background = 'rgba(0, 123, 255, 0.6)';
+
+        };
+
+    }
+
+
+
+    injectButton();
+
+    setInterval(injectButton, 3000);
+
+})();
